@@ -1,0 +1,87 @@
+filebeat.inputs:
+  - type: filestream
+    id: operational_traces
+    enabled: true
+    paths:
+      - /var/log/services/operational/*.log
+    parsers:
+      - ndjson:
+          target: "json"
+          add_error_key: true
+    fields:
+      elastic_index: operational-traces-prod
+      fingerprint: "true"
+
+  - type: filestream
+    id: technical_traces
+    enabled: true
+    paths:
+      - /var/log/services/technical/*.log
+    parsers:
+      - multiline:
+          type: pattern
+          pattern: '^20'
+          negate: true
+          match: after
+    fields:
+      elastic_index: technical-traces-prod
+      tokenizer: "true"
+
+processors:
+  - dissect:
+      when:
+        equals:
+          fields.tokenizer: "true"
+      tokenizer: "%{occurredOn} [%{domain}] [%{environment}] [%{app}] [%{instance}] [%{correlationId}] [%{origin}] [%{user}] [%{thread}] %{level} %{logger} - %{msg}"
+      field: "message"
+      target_prefix: "json"
+  - timestamp:
+      field: json.occurredOn
+      layouts:
+        - '2006-01-02T15:04:05Z'
+        - '2006-01-02T15:04:05.999Z'
+      test:
+        - '2019-06-22T16:33:51Z'
+        - '2021-03-12T08:46:30.636Z'
+  - fingerprint:
+      when:
+        equals:
+          fields.fingerprint: "true"
+      fields: ["json.occurredOn", "json.app", "json.instance", "json.action", "json.environment", "json.elapsedTime"]
+      target_field: "@metadata._id"
+#  - add_cloud_metadata: ~
+
+# ============================== Filebeat modules ==============================
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: false
+
+# ======================= Elasticsearch template setting =======================
+setup.template.settings:
+  index.number_of_shards: 1
+
+  # =================================== Kibana ===================================
+
+# ---------------------------- Elasticsearch Output ----------------------------
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "%{[fields.elastic_index]}-8"
+  ssl.verification_mode: none
+
+# Desactivamos ILM porque no queremos que filebeat nos cree la suya por defecto
+# queremos que se use la ILM que haya definida en la template que case con el índice
+setup:
+  ilm:
+    enabled: false
+  # Como vamos a tener nuestra template definida en elastic cloud y no queremos que filebeat nos cree ninguna
+  template:
+    enabled: false
+
+logging:
+  level: warning
+  to_files: true
+  to_syslog: false
+  files:
+    path: /var/log/filebeat
+    name: seg-filebeat.log
+    keepfiles: 7
